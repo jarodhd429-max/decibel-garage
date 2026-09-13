@@ -45,6 +45,80 @@ function shopUrl(query) {
   return `https://www.crutchfield.com/search?query=${encodeURIComponent(query)}`;
 }
 
+// ---- Subwoofer box math (verified acoustic formulas) ----
+
+function sealedNetVolumeLiters(vasLiters, qts, qtcTarget = 0.707) {
+  return vasLiters / ((qtcTarget / qts) ** 2 - 1);
+}
+
+function portedPortLengthCm(vbLiters, fbHz, portDiameterCm, numPorts = 1) {
+  return (
+    (23562.5 * portDiameterCm ** 2 * numPorts) / (fbHz ** 2 * vbLiters) -
+    0.732 * portDiameterCm
+  );
+}
+
+function designBox({ vas, qts, boxType, numSubs, targetFb, woodThickness = 0.75 }) {
+  let netVolLSingle;
+  let fb = targetFb;
+  if (boxType === "sealed") {
+    netVolLSingle = sealedNetVolumeLiters(vas, qts, 0.707);
+  } else {
+    netVolLSingle = vas * 1.2;
+    if (!fb) fb = 33;
+  }
+
+  const netVolLTotal = netVolLSingle * numSubs;
+  const netVolFt3Total = netVolLTotal / 28.3168;
+
+  // Box proportions: depth : height : width = 1 : 1.25 : 1.6 (trunk-friendly ratio)
+  const ratioD = 1, ratioH = 1.25, ratioW = 1.6;
+  const netVolIn3 = netVolFt3Total * 1728;
+  const unitVol = ratioD * ratioH * ratioW;
+  const scale = Math.cbrt(netVolIn3 / unitVol);
+
+  const depth = ratioD * scale;
+  const height = ratioH * scale;
+  const width = ratioW * scale;
+
+  const extDepth = depth + 2 * woodThickness;
+  const extHeight = height + 2 * woodThickness;
+  const extWidth = width + 2 * woodThickness;
+
+  const result = {
+    boxType,
+    netVolumeFt3: Math.round(netVolFt3Total * 100) / 100,
+    internal: { depth, height, width },
+    external: { depth: extDepth, height: extHeight, width: extWidth },
+    woodThickness,
+  };
+
+  if (boxType === "ported") {
+    const portAreaIn2 = 14 * numSubs;
+    const portDiamIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
+    const portDiamCm = portDiamIn * 2.54;
+    const lengthCm = portedPortLengthCm(netVolLTotal, fb, portDiamCm, 1);
+    const lengthIn = Math.max(lengthCm / 2.54, 2);
+    result.port = {
+      tuningHz: fb,
+      diameterIn: Math.round(portDiamIn * 10) / 10,
+      lengthIn: Math.round(lengthIn * 10) / 10,
+    };
+  }
+
+  return result;
+}
+
+function cutList(design, woodThickness) {
+  const { width, height, depth } = design.external;
+  const round1 = (n) => Math.round(n * 10) / 10;
+  return [
+    { panel: "Top and bottom", qty: 2, w: round1(width - 2 * woodThickness), h: round1(depth) },
+    { panel: "Left and right sides", qty: 2, w: round1(depth), h: round1(height - 2 * woodThickness) },
+    { panel: "Front baffle and back", qty: 2, w: round1(width - 2 * woodThickness), h: round1(height - 2 * woodThickness) },
+  ];
+}
+
 export default function DecibelGarage() {
   const [year, setYear] = useState("");
   const [make, setMake] = useState("");
@@ -56,6 +130,54 @@ export default function DecibelGarage() {
   const [error, setError] = useState("");
 
   const canSubmit = useMemo(() => year.trim() && make.trim() && model.trim(), [year, make, model]);
+
+  // Subwoofer box builder state
+  const [subDiameter, setSubDiameter] = useState("12");
+  const [numSubs, setNumSubs] = useState("1");
+  const [vas, setVas] = useState("");
+  const [qts, setQts] = useState("");
+  const [boxType, setBoxType] = useState("sealed");
+  const [targetFb, setTargetFb] = useState("33");
+  const [boxDesign, setBoxDesign] = useState(null);
+  const [boxError, setBoxError] = useState("");
+
+  const canBuildBox = useMemo(() => {
+    const vasNum = parseFloat(vas);
+    const qtsNum = parseFloat(qts);
+    return vasNum > 0 && qtsNum > 0 && qtsNum < 1;
+  }, [vas, qts]);
+
+  function buildBox(e) {
+    e.preventDefault();
+    setBoxError("");
+    const vasNum = parseFloat(vas);
+    const qtsNum = parseFloat(qts);
+    const numSubsNum = parseInt(numSubs, 10) || 1;
+    const fbNum = parseFloat(targetFb) || 33;
+
+    if (boxType === "sealed" && qtsNum >= 0.707) {
+      setBoxError(
+        "This driver's Qts is too high for a tight sealed alignment. A ported box will suit it better."
+      );
+      setBoxDesign(null);
+      return;
+    }
+
+    try {
+      const design = designBox({
+        vas: vasNum,
+        qts: qtsNum,
+        boxType,
+        numSubs: numSubsNum,
+        targetFb: fbNum,
+      });
+      setBoxDesign(design);
+    } catch (err) {
+      console.error(err);
+      setBoxError("Couldn't calculate a box for those numbers. Double check your Vas and Qts values.");
+      setBoxDesign(null);
+    }
+  }
 
   async function getRecommendation(e) {
     e.preventDefault();
@@ -262,6 +384,176 @@ export default function DecibelGarage() {
               >
                 Shop this build
               </a>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Subwoofer box builder */}
+      <section style={{ padding: "0 28px 56px", maxWidth: 1040, margin: "0 auto" }}>
+        <div style={{ marginBottom: 24 }}>
+          <h2 style={{ fontSize: 28, margin: "0 0 8px" }}>Build a subwoofer box to spec</h2>
+          <p style={{ fontSize: 14, color: COLORS.textMuted, maxWidth: 560, lineHeight: 1.6, margin: 0 }}>
+            Enter your subwoofer's Thiele-Small parameters from its spec sheet and we'll
+            calculate net volume, box dimensions, and a full panel cut list. Ported
+            designs include port diameter and length tuned to your target frequency.
+          </p>
+        </div>
+
+        <form
+          onSubmit={buildBox}
+          style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`, borderRadius: 8, padding: 28 }}
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+            <Field label="Sub size (inches)">
+              <select value={subDiameter} onChange={(e) => setSubDiameter(e.target.value)} style={inputStyle}>
+                {["8", "10", "12", "15", "18"].map((s) => (
+                  <option key={s} value={s}>{s}"</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Number of subs">
+              <select value={numSubs} onChange={(e) => setNumSubs(e.target.value)} style={inputStyle}>
+                {["1", "2", "3", "4"].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Vas (liters)">
+              <input
+                value={vas}
+                onChange={(e) => setVas(e.target.value)}
+                placeholder="e.g. 65"
+                style={inputStyle}
+                inputMode="decimal"
+              />
+            </Field>
+            <Field label="Qts">
+              <input
+                value={qts}
+                onChange={(e) => setQts(e.target.value)}
+                placeholder="e.g. 0.45"
+                style={inputStyle}
+                inputMode="decimal"
+              />
+            </Field>
+          </div>
+
+          <div style={{ marginBottom: 20 }}>
+            <div style={labelStyle}>Box type</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              {[
+                { id: "sealed", label: "Sealed", desc: "Tighter, more accurate bass" },
+                { id: "ported", label: "Ported", desc: "Louder, more low-end output" },
+              ].map((t) => (
+                <button
+                  type="button"
+                  key={t.id}
+                  onClick={() => setBoxType(t.id)}
+                  style={{
+                    flex: 1,
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    borderRadius: 6,
+                    border: `1px solid ${boxType === t.id ? COLORS.accent : COLORS.panelBorder}`,
+                    background: boxType === t.id ? "rgba(61,165,255,0.1)" : "transparent",
+                    color: COLORS.text,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{t.label}</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>{t.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {boxType === "ported" && (
+            <div style={{ marginBottom: 20, maxWidth: 220 }}>
+              <Field label="Target tuning (Hz)">
+                <input
+                  value={targetFb}
+                  onChange={(e) => setTargetFb(e.target.value)}
+                  placeholder="33"
+                  style={inputStyle}
+                  inputMode="decimal"
+                />
+              </Field>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={!canBuildBox}
+            style={{
+              width: "100%",
+              padding: "14px 0",
+              borderRadius: 6,
+              border: "none",
+              background: canBuildBox ? COLORS.accent : COLORS.panelBorder,
+              color: canBuildBox ? "#0A0B0D" : COLORS.textMuted,
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: canBuildBox ? "pointer" : "not-allowed",
+            }}
+          >
+            Calculate box
+          </button>
+          <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 10, lineHeight: 1.5 }}>
+            Find Vas and Qts on your subwoofer's spec sheet or product page. These
+            numbers vary by driver, not by car, so use the exact values for your model.
+          </div>
+        </form>
+
+        {boxError && <div style={{ marginTop: 16, color: COLORS.warn, fontSize: 14 }}>{boxError}</div>}
+
+        {boxDesign && (
+          <div style={{ marginTop: 24, background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`, borderRadius: 8, padding: 28 }}>
+            <h3 style={{ fontSize: 20, margin: "0 0 20px" }}>
+              {numSubs}x {subDiameter}" {boxDesign.boxType} box
+            </h3>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 20 }}>
+              <ResultCard title="Net internal volume" value={`${boxDesign.netVolumeFt3} cubic feet`} />
+              <ResultCard
+                title="External dimensions"
+                value={`${boxDesign.external.width.toFixed(1)} W x ${boxDesign.external.height.toFixed(1)} H x ${boxDesign.external.depth.toFixed(1)} D in`}
+              />
+              {boxDesign.port ? (
+                <ResultCard
+                  title="Port"
+                  value={`${boxDesign.port.diameterIn} in diameter, ${boxDesign.port.lengthIn} in long, tuned to ${boxDesign.port.tuningHz} Hz`}
+                />
+              ) : (
+                <ResultCard title="Alignment" value="Sealed, Qtc 0.707 (textbook flat response)" />
+              )}
+            </div>
+
+            <div style={{ fontSize: 13, color: COLORS.textMuted, marginBottom: 8, fontWeight: 600 }}>
+              Cut list (0.75 inch MDF, external dimensions)
+            </div>
+            <div style={{ border: `1px solid ${COLORS.panelBorder}`, borderRadius: 6, overflow: "hidden" }}>
+              {cutList(boxDesign, boxDesign.woodThickness).map((row, i) => (
+                <div
+                  key={row.panel}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    padding: "10px 14px",
+                    fontSize: 13,
+                    borderTop: i === 0 ? "none" : `1px solid ${COLORS.panelBorder}`,
+                    background: COLORS.bg,
+                  }}
+                >
+                  <span>{row.panel} (qty {row.qty})</span>
+                  <span style={{ color: COLORS.textMuted }}>{row.w}" x {row.h}"</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 12, lineHeight: 1.5 }}>
+              Cut list assumes a simple rectangular box with butt-jointed panels.
+              Add internal bracing for boxes over 2 cubic feet, and always round
+              cuts to the nearest tool your saw can hold steady.
             </div>
           </div>
         )}
