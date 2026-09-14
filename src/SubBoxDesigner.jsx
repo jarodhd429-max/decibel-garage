@@ -1,5 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { SUB_DATABASE, subLabel } from "./subDatabase";
+import ThreeBoxView from "./ThreeBoxView.jsx";
+import { WedgeDiagram, NotchDiagram } from "./ShapeDiagram2D.jsx";
 
 const C = {
   bg: "#121316",
@@ -347,16 +349,36 @@ export default function SubBoxDesigner() {
           {warning && <div style={{ marginTop: 10, fontSize: 12, color: C.warn }}>{warning}</div>}
         </div>
 
-        {/* 3D-ish view */}
-        <Box3DView
-          shapeType={shapeType}
-          rectExt={rectExt}
-          render3d={render3d}
-          sub={sub}
-          numSubs={numSubs}
-          port={port}
-          subPlacement={subPlacement}
-        />
+        {/* Preview: real 3D for rectangular, 2D technical drawing for angled/notched shapes */}
+        <div style={{ background: C.panel, border: `1px solid ${C.panelBorder}`, borderRadius: 8, overflow: "hidden" }}>
+          {shapeType === "rectangular" && (
+            <ThreeBoxView
+              width={rectExt.width}
+              height={rectExt.height}
+              depth={rectExt.depth}
+              numSubs={numSubs}
+              cutoutIn={sub.cutoutIn}
+              subPlacement={subPlacement}
+              port={port}
+            />
+          )}
+          {shapeType === "wedge" && (
+            <WedgeDiagram
+              width={render3d.width}
+              depth={render3d.depth}
+              frontHeight={render3d.frontHeight}
+              backHeight={render3d.backHeight}
+            />
+          )}
+          {shapeType === "notch" && (
+            <NotchDiagram
+              width={render3d.width}
+              depth={render3d.depth}
+              notchW={render3d.notchW}
+              notchD={render3d.notchD}
+            />
+          )}
+        </div>
       </div>
 
       {/* Cut list */}
@@ -402,153 +424,6 @@ function Slider({ label, value, min, max, onChange }) {
       </div>
       <input type="range" min={min} max={max} step={0.1} value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))} style={{ width: "100%" }} />
-    </div>
-  );
-}
-
-function Box3DView({ shapeType, rectExt, render3d, sub, numSubs, port, subPlacement }) {
-  const [rot, setRot] = useState({ x: -20, y: -30 });
-  const dragging = useRef(false);
-  const lastPos = useRef({ x: 0, y: 0 });
-
-  function onPointerDown(e) {
-    dragging.current = true;
-    lastPos.current = { x: e.clientX, y: e.clientY };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  }
-  function onPointerMove(e) {
-    if (!dragging.current) return;
-    const dx = e.clientX - lastPos.current.x;
-    const dy = e.clientY - lastPos.current.y;
-    lastPos.current = { x: e.clientX, y: e.clientY };
-    setRot((r) => ({ x: Math.max(-80, Math.min(80, r.x - dy * 0.5)), y: r.y + dx * 0.5 }));
-  }
-  function onPointerUp() { dragging.current = false; }
-
-  let dims;
-  if (shapeType === "rectangular") dims = rectExt;
-  else if (shapeType === "wedge") dims = { width: render3d.width, height: Math.max(render3d.frontHeight, render3d.backHeight), depth: render3d.depth };
-  else dims = { width: render3d.width, height: render3d.height, depth: render3d.depth };
-
-  const maxDim = Math.max(dims.width, dims.height, dims.depth);
-  const pxPerIn = Math.min(180 / maxDim, 14);
-  const w = dims.width * pxPerIn;
-  const h = dims.height * pxPerIn;
-  const d = dims.depth * pxPerIn;
-
-  const cutoutPx = Math.min(sub.cutoutIn * pxPerIn, w / (numSubs > 1 ? numSubs : 1) - 10);
-
-  const driverDots = (faceW) => Array.from({ length: numSubs }).map((_, i) => (
-    <div key={i} style={{
-      position: "absolute", left: `${((i + 0.5) / numSubs) * 100}%`, top: "50%",
-      width: cutoutPx, height: cutoutPx, borderRadius: "50%",
-      background: "#1A1A1A", border: "3px solid #333", transform: "translate(-50%, -50%)",
-    }} />
-  ));
-
-  return (
-    <div
-      style={{
-        background: C.panel, border: `1px solid ${C.panelBorder}`, borderRadius: 8,
-        display: "flex", alignItems: "center", justifyContent: "center", minHeight: 320,
-        cursor: "grab", touchAction: "none", perspective: 900,
-      }}
-      onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}
-    >
-      {shapeType === "rectangular" && (
-        <div style={{ width: w, height: h, position: "relative", transformStyle: "preserve-3d", transform: `rotateX(${rot.x}deg) rotateY(${rot.y}deg)` }}>
-          <Face w={w} h={h} style={{ transform: `translateZ(${d / 2}px)`, background: C.wood }}>
-            {subPlacement === "front" && driverDots(w)}
-            {port && port.placement === "front" && <PortDot port={port} pxPerIn={pxPerIn} />}
-          </Face>
-          <Face w={w} h={h} style={{ transform: `translateZ(${-d / 2}px) rotateY(180deg)`, background: C.woodDark }} />
-          <Face w={d} h={h} style={{ transform: `rotateY(-90deg) translateZ(${w / 2}px)`, background: C.woodSide }}>
-            {subPlacement === "side" && driverDots(d)}
-            {port && port.placement === "side" && <PortDot port={port} pxPerIn={pxPerIn} />}
-          </Face>
-          <Face w={d} h={h} style={{ transform: `rotateY(90deg) translateZ(${d / 2}px)`, background: C.woodSide }} />
-          <Face w={w} h={d} style={{ transform: `rotateX(90deg) translateZ(${h / 2}px)`, background: C.woodTop }}>
-            {subPlacement === "top" && driverDots(w)}
-          </Face>
-          <Face w={w} h={d} style={{ transform: `rotateX(-90deg) translateZ(${h / 2}px)`, background: C.woodBottom }} />
-        </div>
-      )}
-
-      {shapeType === "wedge" && (() => {
-        const fh = render3d.frontHeight * pxPerIn;
-        const bh = render3d.backHeight * pxPerIn;
-        const maxH = Math.max(fh, bh);
-        const slant = Math.sqrt(d ** 2 + (bh - fh) ** 2);
-        const angleDeg = (Math.atan2(bh - fh, d) * 180) / Math.PI;
-        return (
-          <div style={{ width: w, height: maxH, position: "relative", transformStyle: "preserve-3d", transform: `rotateX(${rot.x}deg) rotateY(${rot.y}deg)` }}>
-            <Face w={w} h={fh} style={{ transform: `translateZ(${d / 2}px) translateY(${maxH - fh}px)`, background: C.wood }}>
-              {subPlacement === "front" && driverDots(w)}
-              {port && port.placement === "front" && <PortDot port={port} pxPerIn={pxPerIn} />}
-            </Face>
-            <Face w={w} h={bh} style={{ transform: `translateZ(${-d / 2}px) translateY(${maxH - bh}px) rotateY(180deg)`, background: C.woodDark }} />
-            <Face w={w} h={d} style={{ transform: `rotateX(-90deg) translateZ(${maxH}px)`, background: C.woodBottom }} />
-            <div style={{
-              position: "absolute", width: w, height: slant, top: 0, left: 0,
-              background: C.woodTop, backfaceVisibility: "hidden",
-              transformOrigin: "top center",
-              transform: `translateY(${maxH - Math.max(fh, bh)}px) translateZ(${fh > bh ? d / 2 : -d / 2}px) rotateX(${fh > bh ? -90 - angleDeg : -90 + angleDeg}deg)`,
-            }} />
-            {[-1, 1].map((side) => (
-              <div key={side} style={{
-                position: "absolute", width: d, height: maxH, top: 0, left: 0,
-                background: C.woodSide, backfaceVisibility: "hidden",
-                transform: side < 0 ? `rotateY(-90deg) translateZ(${w / 2}px)` : `rotateY(90deg) translateZ(${d / 2}px)`,
-                clipPath: `polygon(0% ${maxH - fh}px, 100% ${maxH - bh}px, 100% 100%, 0% 100%)`,
-              }} />
-            ))}
-          </div>
-        );
-      })()}
-
-      {shapeType === "notch" && (
-        <div style={{ width: w, height: h, position: "relative", transformStyle: "preserve-3d", transform: `rotateX(${rot.x}deg) rotateY(${rot.y}deg)` }}>
-          <Face w={w} h={h} style={{ transform: `translateZ(${d / 2}px)`, background: C.wood }}>
-            {subPlacement === "front" && driverDots(w)}
-            {port && port.placement === "front" && <PortDot port={port} pxPerIn={pxPerIn} />}
-          </Face>
-          <Face w={w} h={h} style={{ transform: `translateZ(${-d / 2}px) rotateY(180deg)`, background: C.woodDark }} />
-          <Face w={d} h={h} style={{ transform: `rotateY(-90deg) translateZ(${w / 2}px)`, background: C.woodSide }} />
-          <Face w={d} h={h} style={{ transform: `rotateY(90deg) translateZ(${d / 2}px)`, background: C.woodSide }} />
-          <Face w={w} h={d} style={{ transform: `rotateX(90deg) translateZ(${h / 2}px)`, background: C.woodTop }} />
-          <Face w={w} h={d} style={{ transform: `rotateX(-90deg) translateZ(${h / 2}px)`, background: C.woodBottom }} />
-          <div style={{
-            position: "absolute",
-            width: (render3d.notchW / dims.width) * w,
-            height: h,
-            top: 0,
-            right: 0,
-            transform: `translateZ(${-d / 2}px) translateX(${(render3d.notchW / dims.width) * w}px) rotateY(90deg)`,
-            background: C.notch,
-            border: "2px dashed rgba(255,107,74,0.8)",
-          }} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PortDot({ port, pxPerIn }) {
-  const size = port.kind === "round" ? port.diameterIn * pxPerIn : Math.max(port.widthIn, port.heightIn) * pxPerIn;
-  return (
-    <div style={{
-      position: "absolute", right: 8, bottom: 8,
-      width: Math.max(size, 8), height: Math.max(port.kind === "round" ? size : port.heightIn * pxPerIn, 8),
-      borderRadius: port.kind === "round" ? "50%" : 4,
-      background: "#0A0A0A", border: "2px solid #333",
-    }} />
-  );
-}
-
-function Face({ w, h, style, children }) {
-  return (
-    <div style={{ position: "absolute", width: w, height: h, top: 0, left: 0, boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.3)", backfaceVisibility: "hidden", ...style }}>
-      {children}
     </div>
   );
 }
