@@ -28,3 +28,4 @@ export function WedgeDiagram({ width, depth, frontHeight, backHeight }) {
       />
       <text x={x0 - 10} y={(yBottom + yFrontTop) / 2} fill={DIM} fontSize={12} textAnchor="end">
         {fr
+        }
