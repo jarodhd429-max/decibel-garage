@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import SubBoxDesigner from "./SubBoxDesigner.jsx";
+import { Analytics } from "@vercel/analytics/react";
 
 const COLORS = {
   bg: "#121316",
@@ -305,6 +306,7 @@ export default function DecibelGarage() {
       <footer style={{ borderTop: `1px solid ${COLORS.panelBorder}`, padding: "24px 28px", fontSize: 12, color: COLORS.textMuted, textAlign: "center" }}>
         Decibel Garage may earn a commission from links to retailers. That doesn't change what we recommend.
       </footer>
+      <Analytics />
     </div>
   );
 }
