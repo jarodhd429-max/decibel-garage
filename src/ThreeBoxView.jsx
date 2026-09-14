@@ -57,4 +57,4 @@ export default function ThreeBoxView({ width, height, depth, numSubs, cutoutIn, 
       const dy = p.clientY - last.y;
       last = { x: p.clientX, y: p.clientY };
       rot.y += dx * 0.008
-    }
+    };
