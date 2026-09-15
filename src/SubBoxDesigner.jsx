@@ -427,23 +427,31 @@ export default function SubBoxDesigner() {
             </div>
           )}
 
-          <div style={{ marginBottom: 16 }}>
-            <div style={labelStyle}>Subwoofer mounting</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {subPlacements.map((placement, i) => (
-                <select
-                  key={i}
-                  value={placement}
-                  onChange={(e) => updateSubPlacement(i, e.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="front">Sub {i + 1}: Front baffle</option>
-                  <option value="top">Sub {i + 1}: Top panel</option>
-                  <option value="side">Sub {i + 1}: Side panel</option>
-                </select>
-              ))}
+          {isBandpass ? (
+            <div style={{ marginBottom: 16, fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
+              In a bandpass box the driver mounts on the internal divider, firing into
+              the sealed side and loading the ported side — it isn't visible from outside,
+              so there's no outer-panel placement to choose here.
             </div>
-          </div>
+          ) : (
+            <div style={{ marginBottom: 16 }}>
+              <div style={labelStyle}>Subwoofer mounting</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {subPlacements.map((placement, i) => (
+                  <select
+                    key={i}
+                    value={placement}
+                    onChange={(e) => updateSubPlacement(i, e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="front">Sub {i + 1}: Front baffle</option>
+                    <option value="top">Sub {i + 1}: Top panel</option>
+                    <option value="side">Sub {i + 1}: Side panel</option>
+                  </select>
+                ))}
+              </div>
+            </div>
+          )}
 
           {shapeType === "rectangular" && !isBandpass && (
             <div style={{ borderTop: `1px solid ${C.panelBorder}`, paddingTop: 16, marginBottom: 8 }}>
@@ -536,7 +544,7 @@ export default function SubBoxDesigner() {
               depth={effectiveRectExt.depth}
               numSubs={numSubs}
               cutoutIn={sub.cutoutIn}
-              subPlacements={subPlacements}
+              subPlacements={isBandpass ? [] : subPlacements}
               port={port}
               viewMode={viewMode}
               explodeMode={explodeMode}
