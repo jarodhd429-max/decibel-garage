@@ -583,6 +583,8 @@ export default function SubBoxDesigner() {
               depth={render3d.depth}
               frontHeight={render3d.frontHeight}
               backHeight={render3d.backHeight}
+              onDepthChange={setWedgeDepth}
+              onFrontHeightChange={setWedgeFrontHeight}
             />
           )}
           {shapeType === "notch" && (
@@ -591,6 +593,9 @@ export default function SubBoxDesigner() {
               depth={render3d.depth}
               notchW={render3d.notchW}
               notchD={render3d.notchD}
+              onDepthChange={setNotchDepth}
+              onNotchWChange={setNotchCutWidth}
+              onNotchDChange={setNotchCutDepth}
             />
           )}
           </div>
