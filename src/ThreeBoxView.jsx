@@ -2,10 +2,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 const WOOD = 0.75;
-const TAP_DIST_THRESHOLD = 8;      // px of movement still considered a tap, not a drag
-const DOUBLE_TAP_MS = 350;         // max time between taps to count as double-tap
-const DOUBLE_TAP_DIST = 30;        // max distance between taps to count as double-tap
-const PANEL_DRAG_SCALE = 0.05;     // inches moved per pixel dragged, for pulling a panel
+const TAP_DIST_THRESHOLD = 8;
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_DIST = 30;
+const PANEL_DRAG_SCALE = 0.06; // inches per pixel dragged, for resizing
 
 function buildPanels(width, height, depth) {
   const t = WOOD;
@@ -19,14 +19,21 @@ function buildPanels(width, height, depth) {
   ];
 }
 
+function axisForPanel(name) {
+  if (name === "front" || name === "back") return "depth";
+  if (name === "left" || name === "right") return "width";
+  return "height";
+}
+
 export default function ThreeBoxView({
   width, height, depth, numSubs, cutoutIn, subPlacement, port,
-  viewMode = "solid", explodeMode = "none",
+  viewMode = "solid", explodeMode = "none", onPanelDrag,
 }) {
   const mountRef = useRef(null);
   const engineRef = useRef(null);
   const selectedPanelRef = useRef(null);
-  const manualOffsetsRef = useRef({});
+  const propsRef = useRef({});
+  propsRef.current = { width, height, depth, onPanelDrag };
 
   // One-time scene setup
   useEffect(() => {
@@ -77,24 +84,11 @@ export default function ThreeBoxView({
     function findPanelMesh(name) {
       return group.children.find((c) => c.userData?.name === name);
     }
-
-    function applyPanelPosition(mesh) {
-      const { normal, basePos, autoOffset, name } = mesh.userData;
-      const manual = manualOffsetsRef.current[name] || 0;
-      const total = autoOffset + manual;
-      mesh.position.set(
-        basePos[0] + normal[0] * total,
-        basePos[1] + normal[1] * total,
-        basePos[2] + normal[2] * total
-      );
-    }
-
     function highlight(mesh, on) {
       if (!mesh) return;
       mesh.material.emissive = new THREE.Color(on ? 0x3da5ff : 0x000000);
       mesh.material.emissiveIntensity = on ? 0.55 : 0;
     }
-
     function selectPanel(name) {
       if (selectedPanelRef.current) highlight(findPanelMesh(selectedPanelRef.current), false);
       selectedPanelRef.current = name;
@@ -105,11 +99,12 @@ export default function ThreeBoxView({
       selectedPanelRef.current = null;
     }
 
-    // ---- Interaction: tap/double-tap to select, drag to rotate or move a panel ----
     let downPos = null;
     let dragStarted = false;
-    let dragMode = null; // 'rotate' | 'movePanel'
+    let dragMode = null; // 'rotate' | 'resize'
     let last = { x: 0, y: 0 };
+    let dragStartAxisValue = null;
+    let lastCallTime = 0;
     let lastTapTime = 0;
     let lastTapPos = { x: 0, y: 0 };
 
@@ -143,6 +138,7 @@ export default function ThreeBoxView({
       downPos = { x, y };
       dragStarted = false;
       dragMode = null;
+      dragStartAxisValue = null;
       last = { x, y };
       if (pointerId != null) {
         try { el.setPointerCapture(pointerId); } catch (err) {}
@@ -154,24 +150,28 @@ export default function ThreeBoxView({
       if (!dragStarted) {
         if (totalDist < TAP_DIST_THRESHOLD) return;
         dragStarted = true;
-        dragMode = selectedPanelRef.current ? "movePanel" : "rotate";
+        dragMode = selectedPanelRef.current ? "resize" : "rotate";
+        if (dragMode === "resize") {
+          const axis = axisForPanel(selectedPanelRef.current);
+          dragStartAxisValue = propsRef.current[axis];
+        }
       }
-      const dx = x - last.x;
-      const dy = y - last.y;
-      last = { x, y };
 
       if (dragMode === "rotate") {
+        const dx = x - last.x;
+        const dy = y - last.y;
+        last = { x, y };
         rot.y += dx * 0.008;
         rot.x = Math.max(-1.2, Math.min(1.2, rot.x - dy * 0.008));
         group.rotation.set(rot.x, rot.y, 0);
-      } else if (dragMode === "movePanel") {
-        const mesh = findPanelMesh(selectedPanelRef.current);
-        if (mesh) {
-          const name = mesh.userData.name;
-          const delta = -dy * PANEL_DRAG_SCALE;
-          manualOffsetsRef.current[name] = (manualOffsetsRef.current[name] || 0) + delta;
-          applyPanelPosition(mesh);
-        }
+      } else if (dragMode === "resize") {
+        const now = performance.now();
+        if (now - lastCallTime < 32) return; // light throttle so rebuilds don't overwhelm the phone
+        lastCallTime = now;
+        const axis = axisForPanel(selectedPanelRef.current);
+        const totalDy = y - downPos.y;
+        const newVal = dragStartAxisValue + -totalDy * PANEL_DRAG_SCALE;
+        propsRef.current.onPanelDrag?.(axis, newVal);
       }
     }
     function onUp(x, y) {
@@ -278,11 +278,14 @@ export default function ThreeBoxView({
         transparent: viewMode === "wireframe", opacity: viewMode === "wireframe" ? 0 : 1,
       });
       const mesh = new THREE.Mesh(geo, solidMat);
-      mesh.userData = { name: p.name, normal: p.normal, basePos: p.pos, autoOffset: explodedSet.includes(p.name) ? explodeAmount : 0 };
+      mesh.userData = { name: p.name };
 
-      const manual = manualOffsetsRef.current[p.name] || 0;
-      const total = mesh.userData.autoOffset + manual;
-      mesh.position.set(p.pos[0] + p.normal[0] * total, p.pos[1] + p.normal[1] * total, p.pos[2] + p.normal[2] * total);
+      const autoOffset = explodedSet.includes(p.name) ? explodeAmount : 0;
+      mesh.position.set(
+        p.pos[0] + p.normal[0] * autoOffset,
+        p.pos[1] + p.normal[1] * autoOffset,
+        p.pos[2] + p.normal[2] * autoOffset
+      );
 
       if (selectedPanelRef.current === p.name) {
         solidMat.emissive = new THREE.Color(0x3da5ff);

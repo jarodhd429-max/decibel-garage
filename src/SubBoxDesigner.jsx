@@ -89,6 +89,24 @@ export default function SubBoxDesigner() {
     };
   }
 
+  // Called when a panel is dragged in the 3D view. Directly sets the dragged
+  // axis, then auto-solves one other axis to bring net volume back to the
+  // exact target -- same principle as the wedge/notch auto-solve.
+  function handlePanelDrag(axis, rawValue) {
+    const MIN_DIM = 4;
+    setRectExt((prev) => {
+      const next = { ...prev, [axis]: Math.max(rawValue, MIN_DIM) };
+      const order = ["depth", "height", "width"].filter((a) => a !== axis);
+      const solveAxis = order[0];
+      const fixedAxis = order[1];
+      const known1 = next[axis] - 2 * WOOD;
+      const known2 = next[fixedAxis] - 2 * WOOD;
+      const requiredInternal = idealIn3 / (known1 * known2);
+      next[solveAxis] = Math.max(requiredInternal + 2 * WOOD, MIN_DIM);
+      return next;
+    });
+  }
+
   // Wedge params (front height draggable, back height auto-solved for volume)
   const [wedgeWidth, setWedgeWidth] = useState(24);
   const [wedgeDepth, setWedgeDepth] = useState(16);
@@ -383,6 +401,7 @@ export default function SubBoxDesigner() {
               port={port}
               viewMode={viewMode}
               explodeMode={explodeMode}
+              onPanelDrag={handlePanelDrag}
             />
           )}
           {shapeType === "wedge" && (
