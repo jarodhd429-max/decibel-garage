@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { SUB_DATABASE, subLabel } from "./subDatabase";
 import ThreeBoxView from "./ThreeBoxView.jsx";
 import { WedgeDiagram, NotchDiagram } from "./ShapeDiagram2D.jsx";
@@ -20,6 +20,8 @@ const C = {
   notch: "rgba(255,107,74,0.35)",
 };
 
+const WOOD = 0.75; // inches, 3/4" MDF
+
 function sealedNetVolumeLiters(vas, qts, qtcTarget = 0.707) {
   return vas / ((qtcTarget / qts) ** 2 - 1);
 }
@@ -36,10 +38,16 @@ function idealNetVolumeFt3({ vas, qts, boxType, numSubs, targetFb }) {
   return (single * numSubs) / 28.3168;
 }
 
-const WOOD = 0.75; // inches, 3/4" MDF
+function litersToIn3(l) {
+  return (l / 28.3168) * 1728;
+}
 
 function round1(n) {
   return Math.round(n * 10) / 10;
+}
+
+function isBandpassType(boxType) {
+  return boxType === "bandpass4" || boxType === "bandpass6";
 }
 
 export default function SubBoxDesigner() {
@@ -68,6 +76,12 @@ export default function SubBoxDesigner() {
   const [boxType, setBoxType] = useState("sealed");
   const [targetFb, setTargetFb] = useState(33);
 
+  // Bandpass-specific controls
+  const [chamberRatio, setChamberRatio] = useState(2); // front:rear volume ratio
+  const [rearFraction, setRearFraction] = useState(0.5); // rear chamber size as a fraction of Vas
+
+  const isBandpass = isBandpassType(boxType);
+
   const ideal = useMemo(
     () => idealNetVolumeFt3({ vas: sub.vas, qts: sub.qts, boxType, numSubs, targetFb }),
     [sub.vas, sub.qts, boxType, numSubs, targetFb]
@@ -76,6 +90,12 @@ export default function SubBoxDesigner() {
 
   // ---- Shape ----
   const [shapeType, setShapeType] = useState("rectangular"); // rectangular | wedge | notch
+
+  // Bandpass only makes sense for the rectangular shape -- fall back to sealed
+  // if the person switches to wedge/notch while a bandpass type is selected.
+  useEffect(() => {
+    if (shapeType !== "rectangular" && isBandpass) setBoxType("sealed");
+  }, [shapeType, isBandpass]);
 
   // Rectangular params
   const [rectExt, setRectExt] = useState(() => defaultRectFromVolume(idealIn3));
@@ -91,7 +111,8 @@ export default function SubBoxDesigner() {
 
   // Called when a panel is dragged in the 3D view. Directly sets the dragged
   // axis, then auto-solves one other axis to bring net volume back to the
-  // exact target -- same principle as the wedge/notch auto-solve.
+  // exact target -- same principle as the wedge/notch auto-solve. Not used
+  // for bandpass, where depth is always derived from the chamber volumes.
   function handlePanelDrag(axis, rawValue) {
     const MIN_DIM = 4;
     setRectExt((prev) => {
@@ -120,7 +141,7 @@ export default function SubBoxDesigner() {
 
   // Reset shape params to sensible defaults sized to current ideal volume when sub/box-type changes
   const lastIdealRef = useRef(idealIn3);
-  if (Math.abs(lastIdealRef.current - idealIn3) > 0.01) {
+  if (Math.abs(lastIdealRef.current - idealIn3) > 0.01 && !isBandpass) {
     lastIdealRef.current = idealIn3;
     setRectExt(defaultRectFromVolume(idealIn3));
   }
@@ -129,26 +150,69 @@ export default function SubBoxDesigner() {
   const [portShape, setPortShape] = useState("round"); // round | slotted
   const [portPlacement, setPortPlacement] = useState("front"); // front | side
 
-  // ---- Sub placement ----
-  const [subPlacement, setSubPlacement] = useState("front"); // front | top | side
+  // ---- Sub placement: one entry per sub, independently assignable ----
+  const [subPlacements, setSubPlacements] = useState(["front"]);
+  useEffect(() => {
+    setSubPlacements((prev) => {
+      if (prev.length === numSubs) return prev;
+      if (prev.length < numSubs) return [...prev, ...Array(numSubs - prev.length).fill("front")];
+      return prev.slice(0, numSubs);
+    });
+  }, [numSubs]);
+  function updateSubPlacement(index, value) {
+    setSubPlacements((prev) => prev.map((p, i) => (i === index ? value : p)));
+  }
 
   // ---- 3D view options (rectangular shape only) ----
   const [viewMode, setViewMode] = useState("solid"); // solid | wireframe
   const [explodeMode, setExplodeMode] = useState("none"); // none | all | topbottom | frontrear | leftright
 
+  // ---- Bandpass chamber volumes (used only when isBandpass) ----
+  let bandpass = null;
+  if (isBandpass) {
+    const rearSingleL = rearFraction * sub.vas;
+    const rearTotalL = rearSingleL * numSubs;
+    const frontTotalL = chamberRatio * rearTotalL;
+    bandpass = {
+      rearL: rearTotalL,
+      frontL: frontTotalL,
+      totalL: rearTotalL + frontTotalL,
+      rearIn3: litersToIn3(rearTotalL),
+      frontIn3: litersToIn3(frontTotalL),
+    };
+  }
+
   // ---- Derived geometry per shape ----
   let currentNetFt3, cuts, render3d, warning = null;
+  let effectiveRectExt = rectExt;
 
   if (shapeType === "rectangular") {
-    const iw = rectExt.width - 2 * WOOD;
-    const ih = rectExt.height - 2 * WOOD;
-    const id = rectExt.depth - 2 * WOOD;
-    currentNetFt3 = Math.max((iw * ih * id) / 1728, 0.01);
-    cuts = [
-      { panel: "Top & bottom", qty: 2, dims: `${round1(rectExt.width - 2 * WOOD)}" x ${round1(rectExt.depth)}"` },
-      { panel: "Left & right sides", qty: 2, dims: `${round1(rectExt.depth)}" x ${round1(rectExt.height - 2 * WOOD)}"` },
-      { panel: "Front & back", qty: 2, dims: `${round1(rectExt.width - 2 * WOOD)}" x ${round1(rectExt.height - 2 * WOOD)}"` },
-    ];
+    if (isBandpass) {
+      const iw = rectExt.width - 2 * WOOD;
+      const ih = rectExt.height - 2 * WOOD;
+      const crossArea = iw * ih;
+      const rearDepth = bandpass.rearIn3 / crossArea;
+      const frontDepth = bandpass.frontIn3 / crossArea;
+      const externalDepth = rearDepth + frontDepth + 3 * WOOD; // front wall + divider + back wall
+      effectiveRectExt = { width: rectExt.width, height: rectExt.height, depth: externalDepth };
+      currentNetFt3 = bandpass.totalL / 28.3168;
+      cuts = [
+        { panel: "Top & bottom", qty: 2, dims: `${round1(iw)}" x ${round1(externalDepth)}"` },
+        { panel: "Left & right sides", qty: 2, dims: `${round1(externalDepth)}" x ${round1(ih)}"` },
+        { panel: "Front & back (outer walls)", qty: 2, dims: `${round1(iw)}" x ${round1(ih)}"` },
+        { panel: "Center divider", qty: 1, dims: `${round1(iw)}" x ${round1(ih)}"` },
+      ];
+    } else {
+      const iw = rectExt.width - 2 * WOOD;
+      const ih = rectExt.height - 2 * WOOD;
+      const id = rectExt.depth - 2 * WOOD;
+      currentNetFt3 = Math.max((iw * ih * id) / 1728, 0.01);
+      cuts = [
+        { panel: "Top & bottom", qty: 2, dims: `${round1(rectExt.width - 2 * WOOD)}" x ${round1(rectExt.depth)}"` },
+        { panel: "Left & right sides", qty: 2, dims: `${round1(rectExt.depth)}" x ${round1(rectExt.height - 2 * WOOD)}"` },
+        { panel: "Front & back", qty: 2, dims: `${round1(rectExt.width - 2 * WOOD)}" x ${round1(rectExt.height - 2 * WOOD)}"` },
+      ];
+    }
   } else if (shapeType === "wedge") {
     const iw = wedgeWidth - 2 * WOOD;
     const id = wedgeDepth - 2 * WOOD;
@@ -196,6 +260,7 @@ export default function SubBoxDesigner() {
 
   // ---- Port sizing (shape-agnostic: Helmholtz formula uses area & length) ----
   let port = null;
+  let portB = null; // second port, bandpass6 only
   if (boxType === "ported") {
     const portAreaIn2 = 14 * numSubs;
     let diameterEquivIn, portDesc;
@@ -203,10 +268,9 @@ export default function SubBoxDesigner() {
       diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
       portDesc = { kind: "round", diameterIn: round1(diameterEquivIn) };
     } else {
-      // Slotted: assume height = 4 inches tall (typical), solve width for area
       const slotHeight = 4;
       const slotWidth = portAreaIn2 / slotHeight;
-      diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI); // equivalent diameter for length formula
+      diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
       portDesc = { kind: "slotted", widthIn: round1(slotWidth), heightIn: slotHeight };
     }
     const portDiamCm = diameterEquivIn * 2.54;
@@ -214,6 +278,31 @@ export default function SubBoxDesigner() {
     const lengthCm = portedPortLengthCm(netLiters, targetFb, portDiamCm, 1);
     const lengthIn = round1(Math.max(lengthCm / 2.54, 2));
     port = { ...portDesc, lengthIn, placement: portPlacement };
+  } else if (isBandpass) {
+    const portAreaIn2 = 14 * numSubs;
+    const diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
+    const portDiamCm = diameterEquivIn * 2.54;
+
+    // Front (ported) chamber port -- present for both bandpass4 and bandpass6
+    const frontLengthCm = portedPortLengthCm(bandpass.frontL, targetFb, portDiamCm, 1);
+    port = {
+      kind: "round",
+      diameterIn: round1(diameterEquivIn),
+      lengthIn: round1(Math.max(frontLengthCm / 2.54, 2)),
+      placement: portPlacement,
+      label: boxType === "bandpass6" ? "Port A (front chamber)" : "Port",
+    };
+
+    if (boxType === "bandpass6") {
+      const rearLengthCm = portedPortLengthCm(bandpass.rearL, targetFb, portDiamCm, 1);
+      portB = {
+        kind: "round",
+        diameterIn: round1(diameterEquivIn),
+        lengthIn: round1(Math.max(rearLengthCm / 2.54, 2)),
+        placement: portPlacement,
+        label: "Port B (rear chamber)",
+      };
+    }
   }
 
   return (
@@ -295,22 +384,26 @@ export default function SubBoxDesigner() {
               <select value={boxType} onChange={(e) => setBoxType(e.target.value)} style={inputStyle}>
                 <option value="sealed">Sealed</option>
                 <option value="ported">Ported</option>
+                {shapeType === "rectangular" && <option value="bandpass4">4th order bandpass</option>}
+                {shapeType === "rectangular" && <option value="bandpass6">6th order bandpass</option>}
               </select>
             </Field>
           </div>
 
-          {boxType === "ported" && (
+          {(boxType === "ported" || isBandpass) && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
                 <Field label="Target tuning (Hz)">
                   <input value={targetFb} onChange={(e) => setTargetFb(parseFloat(e.target.value) || 33)} style={inputStyle} inputMode="decimal" />
                 </Field>
-                <Field label="Port shape">
-                  <select value={portShape} onChange={(e) => setPortShape(e.target.value)} style={inputStyle}>
-                    <option value="round">Round</option>
-                    <option value="slotted">Slotted</option>
-                  </select>
-                </Field>
+                {boxType === "ported" && (
+                  <Field label="Port shape">
+                    <select value={portShape} onChange={(e) => setPortShape(e.target.value)} style={inputStyle}>
+                      <option value="round">Round</option>
+                      <option value="slotted">Slotted</option>
+                    </select>
+                  </Field>
+                )}
               </div>
               <div style={{ marginBottom: 16, maxWidth: 220 }}>
                 <Field label="Port placement">
@@ -323,53 +416,99 @@ export default function SubBoxDesigner() {
             </>
           )}
 
-          <div style={{ marginBottom: 16, maxWidth: 220 }}>
-            <Field label="Subwoofer mounted on">
-              <select value={subPlacement} onChange={(e) => setSubPlacement(e.target.value)} style={inputStyle}>
-                <option value="front">Front baffle</option>
-                <option value="top">Top panel</option>
-                <option value="side">Side panel</option>
-              </select>
-            </Field>
-          </div>
-
-          <div style={{ borderTop: `1px solid ${C.panelBorder}`, paddingTop: 16, marginBottom: 8 }}>
-            <div style={{ ...labelStyle, marginBottom: 10 }}>
-              {shapeType === "rectangular" && "Adjust external dimensions"}
-              {shapeType === "wedge" && "Adjust width, depth, and front height — back height auto-solves for volume"}
-              {shapeType === "notch" && "Adjust depth, height, and notch size — width auto-solves for volume"}
+          {isBandpass && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              <Field label="Rear chamber size (x Vas)">
+                <input value={rearFraction} onChange={(e) => setRearFraction(parseFloat(e.target.value) || 0.5)} style={inputStyle} inputMode="decimal" />
+              </Field>
+              <Field label="Chamber ratio (front:rear)">
+                <input value={chamberRatio} onChange={(e) => setChamberRatio(parseFloat(e.target.value) || 2)} style={inputStyle} inputMode="decimal" />
+              </Field>
             </div>
+          )}
 
-            {shapeType === "rectangular" && ["width", "height", "depth"].map((key) => (
-              <Slider key={key} label={key} value={rectExt[key]} min={4} max={60}
-                onChange={(v) => setRectExt((p) => ({ ...p, [key]: v }))} />
-            ))}
-
-            {shapeType === "wedge" && (
-              <>
-                <Slider label="width" value={wedgeWidth} min={8} max={60} onChange={setWedgeWidth} />
-                <Slider label="depth" value={wedgeDepth} min={6} max={40} onChange={setWedgeDepth} />
-                <Slider label="front height" value={wedgeFrontHeight} min={4} max={30} onChange={setWedgeFrontHeight} />
-              </>
-            )}
-
-            {shapeType === "notch" && (
-              <>
-                <Slider label="depth" value={notchDepth} min={6} max={40} onChange={setNotchDepth} />
-                <Slider label="height" value={notchHeight} min={6} max={30} onChange={setNotchHeight} />
-                <Slider label="notch width" value={notchCutWidth} min={1} max={20} onChange={setNotchCutWidth} />
-                <Slider label="notch depth" value={notchCutDepth} min={1} max={20} onChange={setNotchCutDepth} />
-              </>
-            )}
+          <div style={{ marginBottom: 16 }}>
+            <div style={labelStyle}>Subwoofer mounting</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {subPlacements.map((placement, i) => (
+                <select
+                  key={i}
+                  value={placement}
+                  onChange={(e) => updateSubPlacement(i, e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="front">Sub {i + 1}: Front baffle</option>
+                  <option value="top">Sub {i + 1}: Top panel</option>
+                  <option value="side">Sub {i + 1}: Side panel</option>
+                </select>
+              ))}
+            </div>
           </div>
 
-          <div style={{ padding: "10px 14px", borderRadius: 6, background: "rgba(0,0,0,0.2)", fontSize: 13 }}>
-            <span style={{ color: volColor, fontWeight: 700 }}>{currentNetFt3.toFixed(2)} ft³ net</span>{" "}
-            <span style={{ color: C.textMuted }}>
-              ({diffPct >= 0 ? "+" : ""}{diffPct.toFixed(0)}% vs. {ideal.toFixed(2)} ft³ ideal)
-            </span>
-          </div>
+          {shapeType === "rectangular" && !isBandpass && (
+            <div style={{ borderTop: `1px solid ${C.panelBorder}`, paddingTop: 16, marginBottom: 8 }}>
+              <div style={{ ...labelStyle, marginBottom: 10 }}>Adjust external dimensions</div>
+              {["width", "height", "depth"].map((key) => (
+                <Slider key={key} label={key} value={rectExt[key]} min={4} max={60}
+                  onChange={(v) => setRectExt((p) => ({ ...p, [key]: v }))} />
+              ))}
+            </div>
+          )}
+
+          {shapeType === "rectangular" && isBandpass && (
+            <div style={{ borderTop: `1px solid ${C.panelBorder}`, paddingTop: 16, marginBottom: 8 }}>
+              <div style={{ ...labelStyle, marginBottom: 10 }}>Adjust width and height — depth is derived from the chamber volumes</div>
+              <Slider label="width" value={rectExt.width} min={4} max={60} onChange={(v) => setRectExt((p) => ({ ...p, width: v }))} />
+              <Slider label="height" value={rectExt.height} min={4} max={60} onChange={(v) => setRectExt((p) => ({ ...p, height: v }))} />
+              <div style={{ fontSize: 13, color: C.textMuted, marginTop: 8 }}>
+                Depth (derived): <span style={{ color: C.text, fontWeight: 700 }}>{effectiveRectExt.depth.toFixed(1)}"</span>
+              </div>
+            </div>
+          )}
+
+          {shapeType === "wedge" && (
+            <div style={{ borderTop: `1px solid ${C.panelBorder}`, paddingTop: 16, marginBottom: 8 }}>
+              <div style={{ ...labelStyle, marginBottom: 10 }}>Adjust width, depth, and front height — back height auto-solves for volume</div>
+              <Slider label="width" value={wedgeWidth} min={8} max={60} onChange={setWedgeWidth} />
+              <Slider label="depth" value={wedgeDepth} min={6} max={40} onChange={setWedgeDepth} />
+              <Slider label="front height" value={wedgeFrontHeight} min={4} max={30} onChange={setWedgeFrontHeight} />
+            </div>
+          )}
+
+          {shapeType === "notch" && (
+            <div style={{ borderTop: `1px solid ${C.panelBorder}`, paddingTop: 16, marginBottom: 8 }}>
+              <div style={{ ...labelStyle, marginBottom: 10 }}>Adjust depth, height, and notch size — width auto-solves for volume</div>
+              <Slider label="depth" value={notchDepth} min={6} max={40} onChange={setNotchDepth} />
+              <Slider label="height" value={notchHeight} min={6} max={30} onChange={setNotchHeight} />
+              <Slider label="notch width" value={notchCutWidth} min={1} max={20} onChange={setNotchCutWidth} />
+              <Slider label="notch depth" value={notchCutDepth} min={1} max={20} onChange={setNotchCutDepth} />
+            </div>
+          )}
+
+          {isBandpass ? (
+            <div style={{ padding: "10px 14px", borderRadius: 6, background: "rgba(0,0,0,0.2)", fontSize: 13, lineHeight: 1.6 }}>
+              <div>Rear chamber: <span style={{ fontWeight: 700 }}>{(bandpass.rearL / 28.3168).toFixed(2)} ft³</span></div>
+              <div>Front chamber: <span style={{ fontWeight: 700 }}>{(bandpass.frontL / 28.3168).toFixed(2)} ft³</span></div>
+              <div>Total: <span style={{ fontWeight: 700 }}>{currentNetFt3.toFixed(2)} ft³</span></div>
+            </div>
+          ) : (
+            <div style={{ padding: "10px 14px", borderRadius: 6, background: "rgba(0,0,0,0.2)", fontSize: 13 }}>
+              <span style={{ color: volColor, fontWeight: 700 }}>{currentNetFt3.toFixed(2)} ft³ net</span>{" "}
+              <span style={{ color: C.textMuted }}>
+                ({diffPct >= 0 ? "+" : ""}{diffPct.toFixed(0)}% vs. {ideal.toFixed(2)} ft³ ideal)
+              </span>
+            </div>
+          )}
           {warning && <div style={{ marginTop: 10, fontSize: 12, color: C.warn }}>{warning}</div>}
+          {isBandpass && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}>
+              This uses the widely-used ratio-based starting point for bandpass design
+              (rear chamber sized from Vas, front chamber sized as a ratio of the rear).
+              Bandpass response is more sensitive to exact volumes than sealed or ported —
+              treat this as a solid starting point, and verify with simulation software
+              like WinISD before committing to a final tuning.
+            </div>
+          )}
         </div>
 
         {/* Preview: real 3D for rectangular, 2D technical drawing for angled/notched shapes */}
@@ -392,16 +531,16 @@ export default function SubBoxDesigner() {
           <div style={{ background: C.panel, border: `1px solid ${C.panelBorder}`, borderRadius: 8, overflow: "hidden" }}>
           {shapeType === "rectangular" && (
             <ThreeBoxView
-              width={rectExt.width}
-              height={rectExt.height}
-              depth={rectExt.depth}
+              width={effectiveRectExt.width}
+              height={effectiveRectExt.height}
+              depth={effectiveRectExt.depth}
               numSubs={numSubs}
               cutoutIn={sub.cutoutIn}
-              subPlacement={subPlacement}
+              subPlacements={subPlacements}
               port={port}
               viewMode={viewMode}
               explodeMode={explodeMode}
-              onPanelDrag={handlePanelDrag}
+              onPanelDrag={isBandpass ? undefined : handlePanelDrag}
             />
           )}
           {shapeType === "wedge" && (
@@ -421,13 +560,19 @@ export default function SubBoxDesigner() {
             />
           )}
           </div>
+          {isBandpass && (
+            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8 }}>
+              The internal divider between chambers isn't shown in this preview yet —
+              the cut list below is the authoritative build reference for bandpass boxes.
+            </div>
+          )}
         </div>
       </div>
 
       {/* Cut list */}
       <div style={{ marginTop: 24 }}>
         <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 8, fontWeight: 600 }}>
-          Cut list (0.75" MDF, external dimensions) — this is the authoritative source, more so than the preview above for angled or notched shapes
+          Cut list (0.75" MDF, external dimensions) — this is the authoritative source, more so than the preview above for angled, notched, or bandpass shapes
         </div>
         <div style={{ border: `1px solid ${C.panelBorder}`, borderRadius: 6, overflow: "hidden" }}>
           {cuts.map((row, i) => (
@@ -438,12 +583,20 @@ export default function SubBoxDesigner() {
           ))}
           {port && (
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 14px", fontSize: 13, borderTop: `1px solid ${C.panelBorder}`, background: C.bg }}>
-              <span>Port ({port.kind}, {port.placement === "front" ? "front baffle" : "side panel"})</span>
+              <span>{port.label || `Port (${port.kind}, ${port.placement === "front" ? "front baffle" : "side panel"})`}</span>
               <span style={{ color: C.textMuted, textAlign: "right" }}>
                 {port.kind === "round"
                   ? `${port.diameterIn}" diameter x ${port.lengthIn}" long`
                   : `${port.widthIn}" x ${port.heightIn}" slot x ${port.lengthIn}" long`}
                 , tuned to {targetFb} Hz
+              </span>
+            </div>
+          )}
+          {portB && (
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 14px", fontSize: 13, borderTop: `1px solid ${C.panelBorder}`, background: C.bg }}>
+              <span>{portB.label}</span>
+              <span style={{ color: C.textMuted, textAlign: "right" }}>
+                {portB.diameterIn}" diameter x {portB.lengthIn}" long, tuned to {targetFb} Hz
               </span>
             </div>
           )}
@@ -459,18 +612,39 @@ export default function SubBoxDesigner() {
 }
 
 function Slider({ label, value, min, max, onChange }) {
+  const [text, setText] = useState(String(Math.round(value * 10) / 10));
+
+  useEffect(() => {
+    setText(String(Math.round(value * 10) / 10));
+  }, [value]);
+
+  function commit() {
+    const parsed = parseFloat(text);
+    if (!isNaN(parsed)) {
+      const clamped = Math.max(min, Math.min(max, parsed));
+      onChange(clamped);
+    } else {
+      setText(String(Math.round(value * 10) / 10));
+    }
+  }
+
   return (
     <div style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9CA1AA", marginBottom: 4 }}>
-        <span style={{ textTransform: "capitalize" }}>{label}</span>
-        <span>{value.toFixed(1)}"</span>
+      <div style={{ fontSize: 12, color: "#9CA1AA", marginBottom: 4, textTransform: "capitalize" }}>
+        {label} (inches)
       </div>
-      <input type="range" min={min} max={max} step={0.1} value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))} style={{ width: "100%" }} />
+      <input
+        type="text"
+        inputMode="decimal"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+        style={inputStyle}
+      />
     </div>
   );
 }
-
 
 function Field({ label, children }) {
   return (<div><div style={labelStyle}>{label}</div>{children}</div>);

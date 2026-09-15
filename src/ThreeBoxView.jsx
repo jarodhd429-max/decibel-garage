@@ -5,7 +5,7 @@ const WOOD = 0.75;
 const TAP_DIST_THRESHOLD = 8;
 const DOUBLE_TAP_MS = 350;
 const DOUBLE_TAP_DIST = 30;
-const PANEL_DRAG_SCALE = 0.06; // inches per pixel dragged, for resizing
+const PANEL_DRAG_SCALE = 0.06;
 
 function buildPanels(width, height, depth) {
   const t = WOOD;
@@ -25,8 +25,15 @@ function axisForPanel(name) {
   return "height";
 }
 
+// UI placement name -> internal panel name
+function placementPanel(p) {
+  if (p === "top") return "top";
+  if (p === "side") return "right";
+  return "front";
+}
+
 export default function ThreeBoxView({
-  width, height, depth, numSubs, cutoutIn, subPlacement, port,
+  width, height, depth, numSubs, cutoutIn, subPlacements, port,
   viewMode = "solid", explodeMode = "none", onPanelDrag,
 }) {
   const mountRef = useRef(null);
@@ -101,7 +108,7 @@ export default function ThreeBoxView({
 
     let downPos = null;
     let dragStarted = false;
-    let dragMode = null; // 'rotate' | 'resize'
+    let dragMode = null;
     let last = { x: 0, y: 0 };
     let dragStartAxisValue = null;
     let lastCallTime = 0;
@@ -150,7 +157,7 @@ export default function ThreeBoxView({
       if (!dragStarted) {
         if (totalDist < TAP_DIST_THRESHOLD) return;
         dragStarted = true;
-        dragMode = selectedPanelRef.current ? "resize" : "rotate";
+        dragMode = selectedPanelRef.current && propsRef.current.onPanelDrag ? "resize" : "rotate";
         if (dragMode === "resize") {
           const axis = axisForPanel(selectedPanelRef.current);
           dragStartAxisValue = propsRef.current[axis];
@@ -166,7 +173,7 @@ export default function ThreeBoxView({
         group.rotation.set(rot.x, rot.y, 0);
       } else if (dragMode === "resize") {
         const now = performance.now();
-        if (now - lastCallTime < 32) return; // light throttle so rebuilds don't overwhelm the phone
+        if (now - lastCallTime < 32) return;
         lastCallTime = now;
         const axis = axisForPanel(selectedPanelRef.current);
         const totalDy = y - downPos.y;
@@ -266,9 +273,16 @@ export default function ThreeBoxView({
     }[explodeMode] || [];
 
     const panels = buildPanels(width, height, depth);
-    const n = Math.max(numSubs, 1);
-    const offsets = Array.from({ length: n }, (_, i) => (i + 0.5) / n - 0.5);
-    const cutoutR = Math.max(Math.min(cutoutIn / 2, (width / n) / 2 - 0.6), 0.8);
+
+    // Group subs by which panel they're mounted on, so cutouts are spaced
+    // correctly within each panel independently of subs on other panels.
+    const subGroups = {}; // panelName -> array of sub indices
+    (subPlacements || []).forEach((placement, i) => {
+      const panelName = placementPanel(placement);
+      if (!subGroups[panelName]) subGroups[panelName] = [];
+      subGroups[panelName].push(i);
+    });
+
     const decalMat = () => new THREE.MeshBasicMaterial({ color: 0x141414, side: THREE.DoubleSide });
 
     panels.forEach((p) => {
@@ -298,20 +312,27 @@ export default function ThreeBoxView({
         mesh.add(line);
       }
 
-      if (
-        (p.name === "front" && subPlacement === "front") ||
-        (p.name === "top" && subPlacement === "top") ||
-        (p.name === "right" && subPlacement === "side")
-      ) {
+      // Driver cutouts assigned to this panel, spaced across whichever
+      // dimension the panel actually spans.
+      const group1 = subGroups[p.name];
+      if (group1 && group1.length > 0) {
+        const count = group1.length;
+        const spanIn = p.name === "right" ? p.size[2] : p.size[0]; // depth for side panel, width otherwise
+        const cutoutR = Math.max(Math.min(cutoutIn / 2, spanIn / count / 2 - 0.6), 0.7);
+        const offsets = Array.from({ length: count }, (_, k) => (k + 0.5) / count - 0.5);
         offsets.forEach((o) => {
           const circle = new THREE.Mesh(new THREE.CircleGeometry(cutoutR, 32), decalMat());
-          if (p.name === "front") {
-            circle.position.set(o * width, 0, p.size[2] / 2 + 0.02);
-          } else if (p.name === "top") {
-            circle.position.set(o * width, p.size[1] / 2 + 0.02, 0);
-            circle.rotation.x = -Math.PI / 2;
-          } else {
-            circle.position.set(p.size[0] / 2 + 0.02, 0, o * depth * 0.7);
+          if (p.name === "front" || p.name === "top") {
+            const localX = o * p.size[0];
+            if (p.name === "front") {
+              circle.position.set(localX, 0, p.size[2] / 2 + 0.02);
+            } else {
+              circle.position.set(localX, p.size[1] / 2 + 0.02, 0);
+              circle.rotation.x = -Math.PI / 2;
+            }
+          } else if (p.name === "right") {
+            const localZ = o * p.size[2];
+            circle.position.set(p.size[0] / 2 + 0.02, 0, localZ);
             circle.rotation.y = Math.PI / 2;
           }
           mesh.add(circle);
@@ -335,7 +356,7 @@ export default function ThreeBoxView({
 
       group.add(mesh);
     });
-  }, [width, height, depth, numSubs, cutoutIn, subPlacement, port, viewMode, explodeMode]);
+  }, [width, height, depth, numSubs, cutoutIn, subPlacements, port, viewMode, explodeMode]);
 
   return <div ref={mountRef} style={{ width: "100%", height: 340 }} />;
 }
