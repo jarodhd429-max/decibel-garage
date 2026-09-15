@@ -5,25 +5,27 @@ export default function ThreeBoxView({ width, height, depth, numSubs, cutoutIn, 
   const mountRef = useRef(null);
   const engineRef = useRef(null);
 
+  // One-time scene setup
   useEffect(() => {
     const mount = mountRef.current;
-    const w = mount.clientWidth || 320;
-    const h = 340;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(32, w / h, 0.1, 2000);
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 2000);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
+    renderer.domElement.style.display = "block";
+    renderer.domElement.style.touchAction = "none";
+    renderer.domElement.style.cursor = "grab";
     mount.appendChild(renderer.domElement);
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.65));
     const key = new THREE.DirectionalLight(0xffffff, 0.9);
     key.position.set(6, 10, 8);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.25);
-    fill.position.set(-6, -4, -6);
-    scene.add(fill);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.25);
+    fillLight.position.set(-6, -4, -6);
+    scene.add(fillLight);
 
     const group = new THREE.Group();
     scene.add(group);
@@ -32,40 +34,47 @@ export default function ThreeBoxView({ width, height, depth, numSubs, cutoutIn, 
     group.rotation.x = rot.x;
     group.rotation.y = rot.y;
 
+    // ---- Sizing: recalculate whenever the container's actual size is known ----
+    function resize() {
+      const w = mount.clientWidth || 320;
+      const h = 340;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    resize();
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(mount);
+    window.addEventListener("resize", resize);
+
+    // ---- Drag to rotate, using Pointer Events (unified mouse + touch) ----
     let dragging = false;
     let last = { x: 0, y: 0 };
 
-    function pointFromEvent(e) {
-      return e.touches ? e.touches[0] : e;
-    }
-    function onDown(e) {
+    function onPointerDown(e) {
       dragging = true;
-      const p = pointFromEvent(e);
-      last = { x: p.clientX, y: p.clientY };
+      last = { x: e.clientX, y: e.clientY };
+      renderer.domElement.setPointerCapture(e.pointerId);
     }
-    function onMove(e) {
+    function onPointerMove(e) {
       if (!dragging) return;
-      if (e.touches) e.preventDefault();
-      const p = pointFromEvent(e);
-      const dx = p.clientX - last.x;
-      const dy = p.clientY - last.y;
-      last = { x: p.clientX, y: p.clientY };
+      const dx = e.clientX - last.x;
+      const dy = e.clientY - last.y;
+      last = { x: e.clientX, y: e.clientY };
       rot.y += dx * 0.008;
       rot.x = Math.max(-1.2, Math.min(1.2, rot.x - dy * 0.008));
       group.rotation.x = rot.x;
       group.rotation.y = rot.y;
     }
-    function onUp() {
+    function onPointerUp() {
       dragging = false;
     }
 
     const el = renderer.domElement;
-    el.addEventListener("mousedown", onDown);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    el.addEventListener("touchstart", onDown, { passive: true });
-    el.addEventListener("touchmove", onMove, { passive: false });
-    el.addEventListener("touchend", onUp);
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointerleave", onPointerUp);
 
     let raf;
     function animate() {
@@ -78,17 +87,18 @@ export default function ThreeBoxView({ width, height, depth, numSubs, cutoutIn, 
 
     return () => {
       cancelAnimationFrame(raf);
-      el.removeEventListener("mousedown", onDown);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      el.removeEventListener("touchstart", onDown);
-      el.removeEventListener("touchmove", onMove);
-      el.removeEventListener("touchend", onUp);
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", resize);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointerleave", onPointerUp);
       mount.removeChild(renderer.domElement);
       renderer.dispose();
     };
   }, []);
 
+  // Rebuild the box + decals whenever dimensions or options change
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -118,7 +128,6 @@ export default function ThreeBoxView({ width, height, depth, numSubs, cutoutIn, 
 
     const maxDim = Math.max(width, height, depth);
     camera.position.set(0, 0, maxDim * 2.1);
-    camera.aspect = camera.aspect || 1;
     camera.updateProjectionMatrix();
 
     const n = Math.max(numSubs, 1);
@@ -162,10 +171,5 @@ export default function ThreeBoxView({ width, height, depth, numSubs, cutoutIn, 
     }
   }, [width, height, depth, numSubs, cutoutIn, subPlacement, port]);
 
-  return (
-    <div
-      ref={mountRef}
-      style={{ width: "100%", height: 340, touchAction: "none", cursor: "grab" }}
-    />
-  );
-}
+  return <div ref={mountRef} style={{ width: "100%", height: 340 }} />;
+        }
