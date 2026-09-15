@@ -7,9 +7,9 @@ const DOUBLE_TAP_MS = 350;
 const DOUBLE_TAP_DIST = 30;
 const PANEL_DRAG_SCALE = 0.06;
 
-function buildPanels(width, height, depth) {
+function buildPanels(width, height, depth, dividerOffset) {
   const t = WOOD;
-  return [
+  const panels = [
     { name: "top", size: [width, t, depth], pos: [0, height / 2 - t / 2, 0], normal: [0, 1, 0], color: 0x9c6b44 },
     { name: "bottom", size: [width, t, depth], pos: [0, -height / 2 + t / 2, 0], normal: [0, -1, 0], color: 0x5c3e27 },
     { name: "front", size: [width, height - 2 * t, t], pos: [0, 0, depth / 2 - t / 2], normal: [0, 0, 1], color: 0x8b5e3c },
@@ -17,6 +17,18 @@ function buildPanels(width, height, depth) {
     { name: "left", size: [t, height - 2 * t, depth - 2 * t], pos: [-width / 2 + t / 2, 0, 0], normal: [-1, 0, 0], color: 0x7a5334 },
     { name: "right", size: [t, height - 2 * t, depth - 2 * t], pos: [width / 2 - t / 2, 0, 0], normal: [1, 0, 0], color: 0x7a5334 },
   ];
+  if (dividerOffset != null) {
+    // The internal wall separating the two bandpass chambers. Sized to the
+    // internal cross-section so it fits snugly between the side/top/bottom panels.
+    panels.push({
+      name: "divider",
+      size: [width - 2 * t, height - 2 * t, t],
+      pos: [0, 0, dividerOffset],
+      normal: [0, 0, 1],
+      color: 0x3da5ff,
+    });
+  }
+  return panels;
 }
 
 function axisForPanel(name) {
@@ -34,7 +46,7 @@ function placementPanel(p) {
 
 export default function ThreeBoxView({
   width, height, depth, numSubs, cutoutIn, subPlacements, port, portB,
-  viewMode = "solid", explodeMode = "none", onPanelDrag,
+  viewMode = "solid", explodeMode = "none", onPanelDrag, dividerOffset = null,
 }) {
   const mountRef = useRef(null);
   const engineRef = useRef(null);
@@ -272,7 +284,7 @@ export default function ThreeBoxView({
       leftright: ["left", "right"],
     }[explodeMode] || [];
 
-    const panels = buildPanels(width, height, depth);
+    const panels = buildPanels(width, height, depth, dividerOffset);
 
     // Group subs by which panel they're mounted on, so cutouts are spaced
     // correctly within each panel independently of subs on other panels.
@@ -389,7 +401,7 @@ export default function ThreeBoxView({
 
       group.add(mesh);
     });
-  }, [width, height, depth, numSubs, cutoutIn, subPlacements, port, portB, viewMode, explodeMode]);
+  }, [width, height, depth, numSubs, cutoutIn, subPlacements, port, portB, viewMode, explodeMode, dividerOffset]);
 
   return <div ref={mountRef} style={{ width: "100%", height: 340 }} />;
 }

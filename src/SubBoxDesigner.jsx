@@ -225,6 +225,7 @@ export default function SubBoxDesigner() {
   // ---- Derived geometry per shape ----
   let currentNetFt3, cuts, render3d, warning = null;
   let effectiveRectExt = rectExt;
+  let dividerOffset = null; // Z position of the internal divider, bandpass only
 
   if (shapeType === "rectangular") {
     if (isBandpass) {
@@ -235,6 +236,8 @@ export default function SubBoxDesigner() {
       const frontDepth = bandpass.frontIn3 / crossArea;
       const externalDepth = rearDepth + frontDepth + 3 * WOOD; // front wall + divider + back wall
       effectiveRectExt = { width: rectExt.width, height: rectExt.height, depth: externalDepth };
+      // Divider sits right after the rear chamber: back wall + rear chamber + half the divider's own thickness
+      dividerOffset = -externalDepth / 2 + 1.5 * WOOD + rearDepth;
       currentNetFt3 = bandpass.totalL / 28.3168;
       cuts = [
         { panel: "Top & bottom", qty: 2, dims: `${round1(iw)}" x ${round1(externalDepth)}"` },
@@ -571,6 +574,7 @@ export default function SubBoxDesigner() {
               viewMode={viewMode}
               explodeMode={explodeMode}
               onPanelDrag={isBandpass ? undefined : handlePanelDrag}
+              dividerOffset={dividerOffset}
             />
           )}
           {shapeType === "wedge" && (
