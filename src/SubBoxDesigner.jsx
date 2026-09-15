@@ -45,6 +45,22 @@ function portedPortLengthCm(vbLiters, fbHz, portDiameterCm, numPorts = 1) {
   );
 }
 
+function buildPort(areaIn2, volumeLiters, fbHz, shape, placement, label) {
+  const diameterEquivIn = 2 * Math.sqrt(areaIn2 / Math.PI);
+  let portDesc;
+  if (shape === "round") {
+    portDesc = { kind: "round", diameterIn: round1(diameterEquivIn) };
+  } else {
+    const slotHeight = 4;
+    const slotWidth = areaIn2 / slotHeight;
+    portDesc = { kind: "slotted", widthIn: round1(slotWidth), heightIn: slotHeight };
+  }
+  const portDiamCm = diameterEquivIn * 2.54;
+  const lengthCm = portedPortLengthCm(volumeLiters, fbHz, portDiamCm, 1);
+  const lengthIn = round1(Math.max(lengthCm / 2.54, 2));
+  return { ...portDesc, lengthIn, placement, label };
+}
+
 function idealNetVolumeFt3({ vas, qts, boxType, numSubs, targetFb }) {
   const single = boxType === "sealed" ? sealedNetVolumeLiters(vas, qts, 0.707) : vas * 1.2;
   return (single * numSubs) / 28.3168;
@@ -160,6 +176,7 @@ export default function SubBoxDesigner() {
 
   // ---- Port ----
   const [portShape, setPortShape] = useState("round"); // round | slotted
+  const [portAreaPerSub, setPortAreaPerSub] = useState(14); // in2, per sub -- adjustable starting point
   const [portPlacement, setPortPlacement] = useState("front"); // any of the 6 panels
   const [portBPlacement, setPortBPlacement] = useState("back"); // bandpass6 second port
 
@@ -282,49 +299,20 @@ export default function SubBoxDesigner() {
   const volColor = Math.abs(diffPct) < 5 ? C.good : Math.abs(diffPct) < 20 ? "#E8C547" : C.warn;
 
   // ---- Port sizing (shape-agnostic: Helmholtz formula uses area & length) ----
+  const portAreaIn2 = portAreaPerSub * numSubs;
   let port = null;
   let portB = null; // second port, bandpass6 only
   if (boxType === "ported") {
-    const portAreaIn2 = 14 * numSubs;
-    let diameterEquivIn, portDesc;
-    if (portShape === "round") {
-      diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
-      portDesc = { kind: "round", diameterIn: round1(diameterEquivIn) };
-    } else {
-      const slotHeight = 4;
-      const slotWidth = portAreaIn2 / slotHeight;
-      diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
-      portDesc = { kind: "slotted", widthIn: round1(slotWidth), heightIn: slotHeight };
-    }
-    const portDiamCm = diameterEquivIn * 2.54;
     const netLiters = currentNetFt3 * 28.3168;
-    const lengthCm = portedPortLengthCm(netLiters, targetFb, portDiamCm, 1);
-    const lengthIn = round1(Math.max(lengthCm / 2.54, 2));
-    port = { ...portDesc, lengthIn, placement: portPlacement };
+    port = buildPort(portAreaIn2, netLiters, targetFb, portShape, portPlacement, null);
   } else if (isBandpass) {
-    const portAreaIn2 = 14 * numSubs;
-    const diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
-    const portDiamCm = diameterEquivIn * 2.54;
-
     // Front (ported) chamber port -- present for both bandpass4 and bandpass6
-    const frontLengthCm = portedPortLengthCm(bandpass.frontL, targetFb, portDiamCm, 1);
-    port = {
-      kind: "round",
-      diameterIn: round1(diameterEquivIn),
-      lengthIn: round1(Math.max(frontLengthCm / 2.54, 2)),
-      placement: portPlacement,
-      label: boxType === "bandpass6" ? "Port A (front chamber)" : "Port",
-    };
-
+    port = buildPort(
+      portAreaIn2, bandpass.frontL, targetFb, portShape, portPlacement,
+      boxType === "bandpass6" ? "Port A (front chamber)" : "Port"
+    );
     if (boxType === "bandpass6") {
-      const rearLengthCm = portedPortLengthCm(bandpass.rearL, targetFb, portDiamCm, 1);
-      portB = {
-        kind: "round",
-        diameterIn: round1(diameterEquivIn),
-        lengthIn: round1(Math.max(rearLengthCm / 2.54, 2)),
-        placement: portBPlacement,
-        label: "Port B (rear chamber)",
-      };
+      portB = buildPort(portAreaIn2, bandpass.rearL, targetFb, portShape, portBPlacement, "Port B (rear chamber)");
     }
   }
 
@@ -415,18 +403,22 @@ export default function SubBoxDesigner() {
 
           {(boxType === "ported" || isBandpass) && (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
                 <Field label="Target tuning (Hz)">
                   <input value={targetFb} onChange={(e) => setTargetFb(parseFloat(e.target.value) || 33)} style={inputStyle} inputMode="decimal" />
                 </Field>
-                {boxType === "ported" && (
-                  <Field label="Port shape">
-                    <select value={portShape} onChange={(e) => setPortShape(e.target.value)} style={inputStyle}>
-                      <option value="round">Round</option>
-                      <option value="slotted">Slotted</option>
-                    </select>
-                  </Field>
-                )}
+                <Field label="Port shape">
+                  <select value={portShape} onChange={(e) => setPortShape(e.target.value)} style={inputStyle}>
+                    <option value="round">Round</option>
+                    <option value="slotted">Slotted</option>
+                  </select>
+                </Field>
+                <Field label="Port area (in² total)">
+                  <input value={portAreaPerSub * numSubs} onChange={(e) => {
+                    const total = parseFloat(e.target.value) || 14;
+                    setPortAreaPerSub(total / numSubs);
+                  }} style={inputStyle} inputMode="decimal" />
+                </Field>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: boxType === "bandpass6" ? "1fr 1fr" : "1fr", gap: 10, marginBottom: 16 }}>
                 <Field label={boxType === "bandpass6" ? "Port A placement" : "Port placement"}>
