@@ -114,6 +114,10 @@ export default function SubBoxDesigner() {
   // ---- Sub placement ----
   const [subPlacement, setSubPlacement] = useState("front"); // front | top | side
 
+  // ---- 3D view options (rectangular shape only) ----
+  const [viewMode, setViewMode] = useState("solid"); // solid | wireframe
+  const [explodeMode, setExplodeMode] = useState("none"); // none | all | topbottom | frontrear | leftright
+
   // ---- Derived geometry per shape ----
   let currentNetFt3, cuts, render3d, warning = null;
 
@@ -181,9 +185,10 @@ export default function SubBoxDesigner() {
       diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
       portDesc = { kind: "round", diameterIn: round1(diameterEquivIn) };
     } else {
+      // Slotted: assume height = 4 inches tall (typical), solve width for area
       const slotHeight = 4;
       const slotWidth = portAreaIn2 / slotHeight;
-      diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI);
+      diameterEquivIn = 2 * Math.sqrt(portAreaIn2 / Math.PI); // equivalent diameter for length formula
       portDesc = { kind: "slotted", widthIn: round1(slotWidth), heightIn: slotHeight };
     }
     const portDiamCm = diameterEquivIn * 2.54;
@@ -350,7 +355,23 @@ export default function SubBoxDesigner() {
         </div>
 
         {/* Preview: real 3D for rectangular, 2D technical drawing for angled/notched shapes */}
-        <div style={{ background: C.panel, border: `1px solid ${C.panelBorder}`, borderRadius: 8, overflow: "hidden" }}>
+        <div>
+          {shapeType === "rectangular" && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <select value={viewMode} onChange={(e) => setViewMode(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+                <option value="solid">View: Solid</option>
+                <option value="wireframe">View: Wireframe</option>
+              </select>
+              <select value={explodeMode} onChange={(e) => setExplodeMode(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+                <option value="none">Take apart: Nothing</option>
+                <option value="all">Take apart: All sides</option>
+                <option value="topbottom">Take apart: Top/Bottom</option>
+                <option value="frontrear">Take apart: Front/Rear</option>
+                <option value="leftright">Take apart: Left/Right</option>
+              </select>
+            </div>
+          )}
+          <div style={{ background: C.panel, border: `1px solid ${C.panelBorder}`, borderRadius: 8, overflow: "hidden" }}>
           {shapeType === "rectangular" && (
             <ThreeBoxView
               width={rectExt.width}
@@ -360,6 +381,8 @@ export default function SubBoxDesigner() {
               cutoutIn={sub.cutoutIn}
               subPlacement={subPlacement}
               port={port}
+              viewMode={viewMode}
+              explodeMode={explodeMode}
             />
           )}
           {shapeType === "wedge" && (
@@ -378,6 +401,7 @@ export default function SubBoxDesigner() {
               notchD={render3d.notchD}
             />
           )}
+          </div>
         </div>
       </div>
 
@@ -427,6 +451,7 @@ function Slider({ label, value, min, max, onChange }) {
     </div>
   );
 }
+
 
 function Field({ label, children }) {
   return (<div><div style={labelStyle}>{label}</div>{children}</div>);
