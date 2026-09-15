@@ -22,6 +22,18 @@ const C = {
 
 const WOOD = 0.75; // inches, 3/4" MDF
 
+const PANEL_OPTIONS = [
+  { value: "front", label: "Front baffle" },
+  { value: "back", label: "Back panel" },
+  { value: "left", label: "Left panel" },
+  { value: "right", label: "Right panel" },
+  { value: "top", label: "Top panel" },
+  { value: "bottom", label: "Bottom panel" },
+];
+function panelLabel(value) {
+  return PANEL_OPTIONS.find((p) => p.value === value)?.label || value;
+}
+
 function sealedNetVolumeLiters(vas, qts, qtcTarget = 0.707) {
   return vas / ((qtcTarget / qts) ** 2 - 1);
 }
@@ -148,7 +160,8 @@ export default function SubBoxDesigner() {
 
   // ---- Port ----
   const [portShape, setPortShape] = useState("round"); // round | slotted
-  const [portPlacement, setPortPlacement] = useState("front"); // front | side
+  const [portPlacement, setPortPlacement] = useState("front"); // any of the 6 panels
+  const [portBPlacement, setPortBPlacement] = useState("back"); // bandpass6 second port
 
   // ---- Sub placement: one entry per sub, independently assignable ----
   const [subPlacements, setSubPlacements] = useState(["front"]);
@@ -180,6 +193,16 @@ export default function SubBoxDesigner() {
       rearIn3: litersToIn3(rearTotalL),
       frontIn3: litersToIn3(frontTotalL),
     };
+  }
+
+  // Refresh width/height to a sensible starting size whenever the bandpass
+  // chamber volumes change (new sub, sub count, ratio, or rear fraction) --
+  // depth still derives separately from these same chamber volumes.
+  const lastBandpassTotalRef = useRef(bandpass ? bandpass.totalL : null);
+  if (isBandpass && bandpass && Math.abs((lastBandpassTotalRef.current ?? 0) - bandpass.totalL) > 0.01) {
+    lastBandpassTotalRef.current = bandpass.totalL;
+    const { width, height } = defaultRectFromVolume(litersToIn3(bandpass.totalL));
+    setRectExt((prev) => ({ ...prev, width, height }));
   }
 
   // ---- Derived geometry per shape ----
@@ -299,7 +322,7 @@ export default function SubBoxDesigner() {
         kind: "round",
         diameterIn: round1(diameterEquivIn),
         lengthIn: round1(Math.max(rearLengthCm / 2.54, 2)),
-        placement: portPlacement,
+        placement: portBPlacement,
         label: "Port B (rear chamber)",
       };
     }
@@ -405,13 +428,19 @@ export default function SubBoxDesigner() {
                   </Field>
                 )}
               </div>
-              <div style={{ marginBottom: 16, maxWidth: 220 }}>
-                <Field label="Port placement">
+              <div style={{ display: "grid", gridTemplateColumns: boxType === "bandpass6" ? "1fr 1fr" : "1fr", gap: 10, marginBottom: 16 }}>
+                <Field label={boxType === "bandpass6" ? "Port A placement" : "Port placement"}>
                   <select value={portPlacement} onChange={(e) => setPortPlacement(e.target.value)} style={inputStyle}>
-                    <option value="front">Front baffle</option>
-                    <option value="side">Side panel</option>
+                    {PANEL_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </Field>
+                {boxType === "bandpass6" && (
+                  <Field label="Port B placement">
+                    <select value={portBPlacement} onChange={(e) => setPortBPlacement(e.target.value)} style={inputStyle}>
+                      {PANEL_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </Field>
+                )}
               </div>
             </>
           )}
@@ -546,6 +575,7 @@ export default function SubBoxDesigner() {
               cutoutIn={sub.cutoutIn}
               subPlacements={isBandpass ? [] : subPlacements}
               port={port}
+              portB={portB}
               viewMode={viewMode}
               explodeMode={explodeMode}
               onPanelDrag={isBandpass ? undefined : handlePanelDrag}
@@ -591,7 +621,7 @@ export default function SubBoxDesigner() {
           ))}
           {port && (
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 14px", fontSize: 13, borderTop: `1px solid ${C.panelBorder}`, background: C.bg }}>
-              <span>{port.label || `Port (${port.kind}, ${port.placement === "front" ? "front baffle" : "side panel"})`}</span>
+              <span>{port.label || `Port (${port.kind}, ${panelLabel(port.placement)})`}</span>
               <span style={{ color: C.textMuted, textAlign: "right" }}>
                 {port.kind === "round"
                   ? `${port.diameterIn}" diameter x ${port.lengthIn}" long`

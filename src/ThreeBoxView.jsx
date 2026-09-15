@@ -33,7 +33,7 @@ function placementPanel(p) {
 }
 
 export default function ThreeBoxView({
-  width, height, depth, numSubs, cutoutIn, subPlacements, port,
+  width, height, depth, numSubs, cutoutIn, subPlacements, port, portB,
   viewMode = "solid", explodeMode = "none", onPanelDrag,
 }) {
   const mountRef = useRef(null);
@@ -339,24 +339,57 @@ export default function ThreeBoxView({
         });
       }
 
-      if (port && ((p.name === "front" && port.placement === "front") || (p.name === "right" && port.placement === "side"))) {
-        const pw = port.kind === "round" ? port.diameterIn : port.widthIn;
-        const ph = port.kind === "round" ? port.diameterIn : port.heightIn;
-        const portMesh = port.kind === "round"
+      const portsOnThisPanel = [port, portB].filter((prt) => prt && prt.placement === p.name);
+      portsOnThisPanel.forEach((prt, idx) => {
+        // When two ports share a panel, put one near each corner instead of stacking them.
+        const sign = portsOnThisPanel.length > 1 ? (idx === 0 ? 1 : -1) : 1;
+        const pw = prt.kind === "round" ? prt.diameterIn : prt.widthIn;
+        const ph = prt.kind === "round" ? prt.diameterIn : prt.heightIn;
+        const portMesh = prt.kind === "round"
           ? new THREE.Mesh(new THREE.CircleGeometry(pw / 2, 24), decalMat())
           : new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), decalMat());
-        if (p.name === "front") {
-          portMesh.position.set(width / 2 - pw / 2 - 1 - p.pos[0], -(height - 2 * WOOD) / 2 + ph / 2 + 1, p.size[2] / 2 + 0.03);
-        } else {
-          portMesh.position.set(p.size[0] / 2 + 0.03, -(height - 2 * WOOD) / 2 + ph / 2 + 1, depth / 2 - pw / 2 - 1 - p.pos[2] || 0);
-          portMesh.rotation.y = Math.PI / 2;
+        const pad = 1;
+        const halfU = p.size[0] / 2 - pw / 2 - pad; // primary in-plane span (width-like)
+        const halfV = (p.name === "left" || p.name === "right" ? p.size[1] : p.size[1]) / 2 - ph / 2 - pad;
+        switch (p.name) {
+          case "front":
+            portMesh.position.set(sign * halfU, -halfV, p.size[2] / 2 + 0.03);
+            break;
+          case "back":
+            portMesh.position.set(sign * halfU, -halfV, -p.size[2] / 2 - 0.03);
+            portMesh.rotation.y = Math.PI;
+            break;
+          case "left": {
+            const halfUD = p.size[2] / 2 - pw / 2 - pad;
+            portMesh.position.set(-p.size[0] / 2 - 0.03, -halfV, sign * halfUD);
+            portMesh.rotation.y = -Math.PI / 2;
+            break;
+          }
+          case "right": {
+            const halfUD = p.size[2] / 2 - pw / 2 - pad;
+            portMesh.position.set(p.size[0] / 2 + 0.03, -halfV, sign * halfUD);
+            portMesh.rotation.y = Math.PI / 2;
+            break;
+          }
+          case "top": {
+            const halfVD = p.size[2] / 2 - ph / 2 - pad;
+            portMesh.position.set(sign * halfU, p.size[1] / 2 + 0.03, -halfVD);
+            portMesh.rotation.x = -Math.PI / 2;
+            break;
+          }
+          case "bottom": {
+            const halfVD = p.size[2] / 2 - ph / 2 - pad;
+            portMesh.position.set(sign * halfU, -p.size[1] / 2 - 0.03, halfVD);
+            portMesh.rotation.x = Math.PI / 2;
+            break;
+          }
         }
         mesh.add(portMesh);
-      }
+      });
 
       group.add(mesh);
     });
-  }, [width, height, depth, numSubs, cutoutIn, subPlacements, port, viewMode, explodeMode]);
+  }, [width, height, depth, numSubs, cutoutIn, subPlacements, port, portB, viewMode, explodeMode]);
 
   return <div ref={mountRef} style={{ width: "100%", height: 340 }} />;
 }
