@@ -2,6 +2,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 const WOOD = 0.75;
+const TAP_DIST_THRESHOLD = 8;      // px of movement still considered a tap, not a drag
+const DOUBLE_TAP_MS = 350;         // max time between taps to count as double-tap
+const DOUBLE_TAP_DIST = 30;        // max distance between taps to count as double-tap
+const PANEL_DRAG_SCALE = 0.05;     // inches moved per pixel dragged, for pulling a panel
 
 function buildPanels(width, height, depth) {
   const t = WOOD;
@@ -21,6 +25,8 @@ export default function ThreeBoxView({
 }) {
   const mountRef = useRef(null);
   const engineRef = useRef(null);
+  const selectedPanelRef = useRef(null);
+  const manualOffsetsRef = useRef({});
 
   // One-time scene setup
   useEffect(() => {
@@ -50,6 +56,7 @@ export default function ThreeBoxView({
 
     const group = new THREE.Group();
     scene.add(group);
+    const raycaster = new THREE.Raycaster();
 
     let rot = { x: -0.32, y: -0.55 };
     group.rotation.x = rot.x;
@@ -67,56 +74,141 @@ export default function ThreeBoxView({
     resizeObserver.observe(mount);
     window.addEventListener("resize", resize);
 
-    // Drag to rotate: pointer events as primary, raw touch as a fallback
-    // for browsers/webviews with incomplete pointer event support.
-    let dragging = false;
-    let last = { x: 0, y: 0 };
-
-    function startDrag(x, y) {
-      dragging = true;
-      last = { x, y };
+    function findPanelMesh(name) {
+      return group.children.find((c) => c.userData?.name === name);
     }
-    function moveDrag(x, y) {
-      if (!dragging) return;
+
+    function applyPanelPosition(mesh) {
+      const { normal, basePos, autoOffset, name } = mesh.userData;
+      const manual = manualOffsetsRef.current[name] || 0;
+      const total = autoOffset + manual;
+      mesh.position.set(
+        basePos[0] + normal[0] * total,
+        basePos[1] + normal[1] * total,
+        basePos[2] + normal[2] * total
+      );
+    }
+
+    function highlight(mesh, on) {
+      if (!mesh) return;
+      mesh.material.emissive = new THREE.Color(on ? 0x3da5ff : 0x000000);
+      mesh.material.emissiveIntensity = on ? 0.55 : 0;
+    }
+
+    function selectPanel(name) {
+      if (selectedPanelRef.current) highlight(findPanelMesh(selectedPanelRef.current), false);
+      selectedPanelRef.current = name;
+      highlight(findPanelMesh(name), true);
+    }
+    function deselectPanel() {
+      if (selectedPanelRef.current) highlight(findPanelMesh(selectedPanelRef.current), false);
+      selectedPanelRef.current = null;
+    }
+
+    // ---- Interaction: tap/double-tap to select, drag to rotate or move a panel ----
+    let downPos = null;
+    let dragStarted = false;
+    let dragMode = null; // 'rotate' | 'movePanel'
+    let last = { x: 0, y: 0 };
+    let lastTapTime = 0;
+    let lastTapPos = { x: 0, y: 0 };
+
+    function handleTap(x, y) {
+      const now = performance.now();
+      const dt = now - lastTapTime;
+      const dFromLast = Math.hypot(x - lastTapPos.x, y - lastTapPos.y);
+      const isDoubleTap = dt < DOUBLE_TAP_MS && dFromLast < DOUBLE_TAP_DIST;
+      lastTapTime = now;
+      lastTapPos = { x, y };
+      if (!isDoubleTap) return;
+
+      const rect = el.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((x - rect.left) / rect.width) * 2 - 1,
+        -((y - rect.top) / rect.height) * 2 + 1
+      );
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(group.children, false);
+      if (hits.length === 0) {
+        deselectPanel();
+        return;
+      }
+      const name = hits[0].object.userData?.name;
+      if (!name) return;
+      if (selectedPanelRef.current === name) deselectPanel();
+      else selectPanel(name);
+    }
+
+    function onDown(x, y, pointerId) {
+      downPos = { x, y };
+      dragStarted = false;
+      dragMode = null;
+      last = { x, y };
+      if (pointerId != null) {
+        try { el.setPointerCapture(pointerId); } catch (err) {}
+      }
+    }
+    function onMove(x, y) {
+      if (!downPos) return;
+      const totalDist = Math.hypot(x - downPos.x, y - downPos.y);
+      if (!dragStarted) {
+        if (totalDist < TAP_DIST_THRESHOLD) return;
+        dragStarted = true;
+        dragMode = selectedPanelRef.current ? "movePanel" : "rotate";
+      }
       const dx = x - last.x;
       const dy = y - last.y;
       last = { x, y };
-      rot.y += dx * 0.008;
-      rot.x = Math.max(-1.2, Math.min(1.2, rot.x - dy * 0.008));
-      group.rotation.x = rot.x;
-      group.rotation.y = rot.y;
+
+      if (dragMode === "rotate") {
+        rot.y += dx * 0.008;
+        rot.x = Math.max(-1.2, Math.min(1.2, rot.x - dy * 0.008));
+        group.rotation.set(rot.x, rot.y, 0);
+      } else if (dragMode === "movePanel") {
+        const mesh = findPanelMesh(selectedPanelRef.current);
+        if (mesh) {
+          const name = mesh.userData.name;
+          const delta = -dy * PANEL_DRAG_SCALE;
+          manualOffsetsRef.current[name] = (manualOffsetsRef.current[name] || 0) + delta;
+          applyPanelPosition(mesh);
+        }
+      }
     }
-    function endDrag() {
-      dragging = false;
+    function onUp(x, y) {
+      if (!dragStarted && downPos) handleTap(x, y);
+      downPos = null;
+      dragStarted = false;
+      dragMode = null;
     }
 
-    function onPointerDown(e) {
-      startDrag(e.clientX, e.clientY);
-      try { el.setPointerCapture(e.pointerId); } catch (err) {}
-    }
-    function onPointerMove(e) {
-      moveDrag(e.clientX, e.clientY);
-    }
+    function onPointerDown(e) { onDown(e.clientX, e.clientY, e.pointerId); }
+    function onPointerMove(e) { onMove(e.clientX, e.clientY); }
+    function onPointerUp(e) { onUp(e.clientX, e.clientY); }
     function onTouchStart(e) {
       const t = e.touches[0];
-      if (t) startDrag(t.clientX, t.clientY);
+      if (t) onDown(t.clientX, t.clientY, null);
     }
     function onTouchMove(e) {
       const t = e.touches[0];
       if (t) {
-        e.preventDefault();
-        moveDrag(t.clientX, t.clientY);
+        if (downPos && Math.hypot(t.clientX - downPos.x, t.clientY - downPos.y) >= TAP_DIST_THRESHOLD) {
+          e.preventDefault();
+        }
+        onMove(t.clientX, t.clientY);
       }
+    }
+    function onTouchEnd(e) {
+      const t = e.changedTouches[0];
+      if (t) onUp(t.clientX, t.clientY);
     }
 
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
-    el.addEventListener("pointerup", endDrag);
-    el.addEventListener("pointerleave", endDrag);
-    el.addEventListener("pointercancel", endDrag);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", endDrag);
+    el.addEventListener("touchend", onTouchEnd);
     el.addEventListener("contextmenu", (e) => e.preventDefault());
 
     let raf;
@@ -126,7 +218,7 @@ export default function ThreeBoxView({
     }
     animate();
 
-    engineRef.current = { scene, camera, renderer, group, mount };
+    engineRef.current = { scene, camera, renderer, group };
 
     return () => {
       cancelAnimationFrame(raf);
@@ -134,12 +226,11 @@ export default function ThreeBoxView({
       window.removeEventListener("resize", resize);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
-      el.removeEventListener("pointerup", endDrag);
-      el.removeEventListener("pointerleave", endDrag);
-      el.removeEventListener("pointercancel", endDrag);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", endDrag);
+      el.removeEventListener("touchend", onTouchEnd);
       mount.removeChild(el);
       renderer.dispose();
     };
@@ -187,14 +278,16 @@ export default function ThreeBoxView({
         transparent: viewMode === "wireframe", opacity: viewMode === "wireframe" ? 0 : 1,
       });
       const mesh = new THREE.Mesh(geo, solidMat);
+      mesh.userData = { name: p.name, normal: p.normal, basePos: p.pos, autoOffset: explodedSet.includes(p.name) ? explodeAmount : 0 };
 
-      const isExploded = explodedSet.includes(p.name);
-      const off = isExploded ? explodeAmount : 0;
-      mesh.position.set(
-        p.pos[0] + p.normal[0] * off,
-        p.pos[1] + p.normal[1] * off,
-        p.pos[2] + p.normal[2] * off
-      );
+      const manual = manualOffsetsRef.current[p.name] || 0;
+      const total = mesh.userData.autoOffset + manual;
+      mesh.position.set(p.pos[0] + p.normal[0] * total, p.pos[1] + p.normal[1] * total, p.pos[2] + p.normal[2] * total);
+
+      if (selectedPanelRef.current === p.name) {
+        solidMat.emissive = new THREE.Color(0x3da5ff);
+        solidMat.emissiveIntensity = 0.55;
+      }
 
       if (viewMode === "wireframe") {
         const edges = new THREE.EdgesGeometry(geo);
@@ -202,7 +295,6 @@ export default function ThreeBoxView({
         mesh.add(line);
       }
 
-      // Attach driver cutout decals to the panel they belong to
       if (
         (p.name === "front" && subPlacement === "front") ||
         (p.name === "top" && subPlacement === "top") ||
@@ -223,7 +315,6 @@ export default function ThreeBoxView({
         });
       }
 
-      // Attach port decal to its placement panel
       if (port && ((p.name === "front" && port.placement === "front") || (p.name === "right" && port.placement === "side"))) {
         const pw = port.kind === "round" ? port.diameterIn : port.widthIn;
         const ph = port.kind === "round" ? port.diameterIn : port.heightIn;
@@ -244,4 +335,4 @@ export default function ThreeBoxView({
   }, [width, height, depth, numSubs, cutoutIn, subPlacement, port, viewMode, explodeMode]);
 
   return <div ref={mountRef} style={{ width: "100%", height: 340 }} />;
-          }
+}
